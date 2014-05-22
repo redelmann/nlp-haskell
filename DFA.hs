@@ -9,18 +9,19 @@
      course at EPFL. -}
 module DFA where
 
-import Prelude hiding (lookup)
-import Control.Arrow (first, second)
-import Control.Monad.ST
-import Control.Monad.State
-import Control.Monad.Writer
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromJust, isJust)
-import Data.Vector (Vector, (!?))
-import qualified Data.Vector as Vector
-import Data.Vector.Mutable (STVector)
-import qualified Data.Vector.Mutable as MVector
+import           Control.Applicative  ((<$>))
+import           Control.Arrow        (first, second)
+import           Control.Monad.ST
+import           Control.Monad.State
+import           Control.Monad.Writer
+import           Data.Map.Strict      (Map)
+import qualified Data.Map.Strict      as Map
+import           Data.Maybe           (catMaybes, fromJust, isJust)
+import           Data.Vector          (Vector, (!?))
+import qualified Data.Vector          as Vector
+import           Data.Vector.Mutable  (STVector)
+import qualified Data.Vector.Mutable  as MVector
+import           Prelude              hiding (lookup)
 
 -- * DFA
 
@@ -63,9 +64,9 @@ fromList xs = runST $ do
     -- Insert all words
     (BuildState s v') <- foldM go (BuildState 1 v) xs
     -- Freeze the vector and return the DFA representation
-    fmap (DFA 0 . Vector.take s) $ Vector.freeze v'
+    (DFA 0 . Vector.take s) <$> Vector.freeze v'
   where
-    go bs (xs, a) = lookupInsert bs 0 xs a
+    go bs (cs, a) = lookupInsert bs 0 cs a
 
     -- Looks up a transition or inserts it.
     lookupInsert (BuildState n v) i [] a = do
@@ -75,18 +76,18 @@ fromList xs = runST $ do
         MVector.write v i (Just a, ts)
         -- Return the original build state
         return (BuildState n v)
-    lookupInsert (BuildState n v) i (x : xs) a = do
+    lookupInsert (BuildState n v) i (c : cs) a = do
         -- Read the node i
         (ma, ts) <- MVector.read v i
-        case Map.lookup x ts of
+        case Map.lookup c ts of
             -- In case the transition is already there, follow it
-            Just k -> lookupInsert (BuildState n v) k xs a
+            Just k -> lookupInsert (BuildState n v) k cs a
             -- If it is not, create a new node and add the transition
             Nothing -> do
                 v' <- createNode n v
-                MVector.write v' i (ma, Map.insert x n ts)
+                MVector.write v' i (ma, Map.insert c n ts)
                 -- Follow the newly inserted transition
-                lookupInsert (BuildState (n + 1) v') n xs a
+                lookupInsert (BuildState (n + 1) v') n cs a
 
     -- Creates a new node.
     createNode n v = do
@@ -166,23 +167,23 @@ atDistance d xs (DFA q ss) = runST $ do
 
         -- | Returns the letter at the given position
         --   from the end of the current prefix
-        letterFromPrefixEnd i = case drop i ys of
+        letterFromPrefixEnd j = case drop j ys of
             (x : _) -> Just x
             _       -> Nothing
 
         -- | Ensures that the vector is big enough to fit column i.
-        ensureColumnExists i = do
+        ensureColumnExists j = do
             v <- get
-            when (MVector.length v < (i + 1) * s) $ do
+            when (MVector.length v < (j + 1) * s) $ do
                 !v' <- liftST $ MVector.grow v (MVector.length v)
                 put v'
-                ensureColumnExists i
+                ensureColumnExists j
 
         -- | Recomputes the column.
         computeColumn 0 = do
             -- Handles the leftmost column
             v <- get
-            forM_ [0 .. s - 1] $ \ i -> liftST $ MVector.write v i i
+            forM_ [0 .. s - 1] $ \ j -> liftST $ MVector.write v j j
         computeColumn k = do
             v <- get
             -- Writes the first row for the column
@@ -197,55 +198,54 @@ atDistance d xs (DFA q ss) = runST $ do
                 -- Write the minimum cost at the given index
                 liftST $ MVector.write v (index k j) $ minimum costs
           where
-            -- | Prefer `a` if it provides a value, otherwise resort to all of the `bs`.
-            a `withPriorityOverAll` bs = do
-                mv <- a
+            -- | Prefer `z` if it provides a value, otherwise resort to all of the `bs`.
+            z `withPriorityOverAll` bs = do
+                mv <- z
                 case mv of
-                    Nothing -> fmap catMaybes $ sequence bs
+                    Nothing -> catMaybes <$> sequence bs
                     Just va -> return [va]
 
             -- | Prefer `a` if it provides a value, otherwise resort to `b`.
-            a `withPriorityOver` b = do
-                mv <- a
+            z `withPriorityOver` b = do
+                mv <- z
                 case mv of
                     Just _ -> return mv
                     Nothing -> b
 
             -- Cost for equality.
-            costOfEqual i j = if letterFromPrefixEnd 0 /= letterAt j
+            costOfEqual l j = if letterFromPrefixEnd 0 /= letterAt j
                 then return Nothing
-                else fmap Just $ costAt (i - 1) (j - 1)
+                else Just <$> costAt (l - 1) (j - 1)
 
             -- | Cost for insertion.
-            costOfInsertion i j = fmap (Just . (+ 1)) $ costAt (i - 1) j
+            costOfInsertion l j = (Just . (+ 1)) <$> costAt (l - 1) j
 
             -- | Cost for deletion.
-            costOfDeletion i j = fmap (Just . (+ 1)) $ costAt i (j - 1)
+            costOfDeletion l j = (Just . (+ 1)) <$> costAt l (j - 1)
 
             -- | Cost of transpostion.
-            costOfTranspose i j
-                | j < 2 || i < 2 = return Nothing
+            costOfTranspose l j
+                | j < 2 || l < 2 = return Nothing
                 | letterAt (j - 1) == letterFromPrefixEnd 0 &&
-                  letterAt j == letterFromPrefixEnd 1 = fmap (Just . (+ 1)) $ costAt (i - 2) (j - 2)
+                  letterAt j == letterFromPrefixEnd 1 = (Just . (+ 1)) <$> costAt (l - 2) (j - 2)
                 | otherwise = return Nothing
 
             -- Cost of substitution.
-            costOfSubstitution i j = fmap (Just . (+ 1)) $ costAt (i - 1) (j - 1)
+            costOfSubstitution l j = (Just . (+ 1)) <$> costAt (l - 1) (j - 1)
 
         -- | Computes the cut off distance given that the vector has been properly set.
-        distanceCutOff i = fmap (minimum . ((d + 1) :)) $ mapM (costAt i) $
+        distanceCutOff l = fmap (minimum . ((d + 1) :)) $ mapM (costAt l) $
             takeWhile (< s) $ dropWhile (< 0) [i - d .. i + d]
 
         -- | Computes the distance with the reference word,
         --   given that the vector has been properly set.
-        distanceWithWord i = do
-            v <- get
-            costAt i (s - 1)
+        distanceWithWord l =
+            costAt l (s - 1)
 
         -- | Gets the cost at a given position.
-        costAt i j = do
+        costAt l j = do
             v <- get
-            liftST $ MVector.read v $ index i j
+            liftST $ MVector.read v $ index l j
 
 
 -- * Examples
