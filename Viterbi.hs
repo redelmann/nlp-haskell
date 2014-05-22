@@ -6,11 +6,11 @@
      in the Introduction to Natural Language Processing course at EPFL. -}
 module Viterbi where
 
-import Control.Monad.State hiding (forM_)
-import Data.Foldable (Foldable, forM_, maximumBy, foldl')
-import Data.Map (Map, (!))
-import qualified Data.Map as Map
-import Data.Ord (comparing)
+import           Control.Monad.State hiding (forM_)
+import           Data.Foldable       (Foldable, foldl', forM_)
+import           Data.Map            ((!))
+import qualified Data.Map            as Map
+import           Data.Ord            (comparing)
 
 -- * Hidden Markov Models
 
@@ -24,10 +24,10 @@ import Data.Ord (comparing)
 
      For arbitrary precision, `p` should be `Rational`. -}
 data Model f s o p = Model
-    { stateUniverse :: f s  -- ^ Possible states, should be finite.
+    { stateUniverse         :: f s  -- ^ Possible states, should be finite.
     , transitionProbability :: s -> s -> p  -- ^ Probability of transitions.
-    , emissionProbability :: s -> o -> p  -- ^ Probability of emissions.
-    , initialProbability :: s -> p -- ^ Starting probability of states.
+    , emissionProbability   :: s -> o -> p  -- ^ Probability of emissions.
+    , initialProbability    :: s -> p -- ^ Starting probability of states.
     }
 
 -- ** Viterbi algorithm
@@ -56,14 +56,14 @@ viterbi states goesTo emits startAt (x : xs) = flip evalState Map.empty $ do
     forM_ states $ \ s ->
         modify $ Map.insert s (startAt s * s `emits` x, [[s]])
     -- Executing the following observations
-    forM_ xs $ \ x -> do
+    forM_ xs $ \ x' -> do
         prev <- get  -- Fetch the values from the previous step
         forM_ states $ \ s -> do
             {- Find the most likely paths leading to the current state,
                with the associated probability -}
             let (ts, prob : _) = unzip $ maximumsBy (comparing snd) $
                                  fmap stepFrom states
-                stepFrom t = (t, fst (prev ! t) * t `goesTo` s * s `emits` x)
+                stepFrom t = (t, fst (prev ! t) * t `goesTo` s * s `emits` x')
                 paths = concat [ map (s :) $ snd $ prev ! t | t <- ts ]
             -- Set the new values associated to the current state
             modify $ Map.insert s (prob, paths)
@@ -74,9 +74,9 @@ viterbi states goesTo emits startAt (x : xs) = flip evalState Map.empty $ do
     maximumsBy f = foldl' go []
       where
         go [] y = [y]
-        go xs y = case f y (head xs) of
-            LT -> xs  -- The current element is smaller than the maxs
-            EQ -> y : xs  -- The current element is also a max
+        go zs y = case f y (head zs) of
+            LT -> zs  -- The current element is smaller than the maxs
+            EQ -> y : zs  -- The current element is also a max
             GT -> [y]  -- The current element is larger than the previous maxs
 
 
@@ -113,7 +113,7 @@ probability transfersTo emits initiallyAt observations states
                   -- Probability of making the given transitions
                   product (zipWith transfersTo states (tail states))
   where
-    sameLength (a : as) (b : bs) = sameLength as bs
+    sameLength (_ : as) (_ : bs) = sameLength as bs
     sameLength [] [] = True
     sameLength _ _ = False
 
@@ -163,6 +163,7 @@ modelWiki = Model
     "Healthy" `transfersTo` "Sick"    = 0.3
     "Sick"    `transfersTo` "Sick"    = 0.6
     "Sick"    `transfersTo` "Healthy" = 0.4
+    _         `transfersTo` _         = 0.0
 
     "Healthy" `emits` "Normal" = 0.5
     "Healthy" `emits` "Dizzy"  = 0.1
@@ -170,9 +171,11 @@ modelWiki = Model
     "Sick"    `emits` "Normal" = 0.1
     "Sick"    `emits` "Dizzy"  = 0.6
     "Sick"    `emits` "Cold"   = 0.3
+    _         `emits` _        = 0.0
 
     startingAt "Healthy" = 0.6
     startingAt "Sick"    = 0.4
+    startingAt _         = 0.0
 
 {- | Example from Wikipedia article on the Viterbi algorithm.
 
